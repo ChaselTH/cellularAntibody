@@ -15,6 +15,7 @@ CENTER = CANVAS_SIZE // 2
 N_CELLS = 90
 N_VIRUSES = 50
 N_ANTIBODIES = 14
+N_LEUKOCYTES = 6
 
 # 尺寸
 CELL_R_SMALL = 10
@@ -22,6 +23,7 @@ CELL_R_LARGE = 18
 VIRUS_R = 7
 AB_Y_SIZE = 7
 AB_R_FOR_COLLISION = 3  # 抗体碰撞半径（用于细胞障碍物）
+LEUKOCYTE_R = 10
 
 # 动画与运动
 FPS = 60
@@ -31,12 +33,23 @@ TURN_SMOOTH = 0.45        # 速度方向平滑系数（越小越丝滑）
 VIRUS_SPEED = 70.0        # px/s
 AB_SPEED = 140.0          # px/s
 CELL_SPEED = 18.0         # px/s 细胞慢速随机漂移
+LEUKOCYTE_SPEED = 95.0    # px/s 白细胞速度
+VIRUS_ATTACHED_SPEED_FACTOR = 0.8
+VIRUS_ATTACHED_SPEED_DECAY = 0.2
+VIRUS_ATTACHED_AVOID_SCALE = 0.12
+CELL_ATTACHED_SPEED_FACTOR = 0.7
+CELL_ATTACHED_SPEED_DECAY = 0.15
 
 # 行为参数
 VIRUS_ATTRACT_CELL = 0.25  # 病毒趋向细胞程度
 AB_SENSE_RADIUS = 120.0    # 抗体感知半径
 AB_CHASE = 0.85            # 抗体追逐强度
 CAPTURE_DIST = 12.0        # 抗体捕获距离
+VIRUS_AVOID_LEUKOCYTE = 0.7  # 病毒远离白细胞基础强度
+LEUKOCYTE_SENSE_RADIUS = 160.0
+LEUKOCYTE_CHASE = 0.9
+AB_SPAWN_MIN = 1
+AB_SPAWN_MAX = 3
 
 # 新增：感染与爆发参数
 INFECTION_PADDING = 2                   # 病毒“贴到细胞”判定阈值补偿（可调）
@@ -53,11 +66,15 @@ CELL_GROW_TIME = 18.0                     # 小细胞长成大细胞的时间（
 BG_COLOR = "white"
 CELL_COLOR = "#4C78A8"
 CELL_INFECTED_COLOR = "#B279A2"
+CELL_INFECTED_BOUND_COLOR = "#A05195"
 CELL_DEAD_COLOR = "#7F7F7F"
 
 VIRUS_COLOR = "#F58518"
+VIRUS_BOUND_COLOR = "#E45756"
 AB_COLOR = "#54A24B"
 AB_FLASH_COLOR = "#E45756"
+LEUKOCYTE_COLOR = "#F2F2F2"
+LEUKOCYTE_OUTLINE = "#333333"
 # =============================
 
 
@@ -73,6 +90,7 @@ class Cell:
     burst_timer: float = 0.0    # infected -> countdown to burst
     grow_timer: float = CELL_GROW_TIME
     divide_timer: Optional[float] = None
+    antibody_attached: int = 0
 
 
 @dataclass
@@ -81,6 +99,7 @@ class Virus:
     y: float
     vx: float
     vy: float
+    attached: int = 0
 
 
 @dataclass
@@ -90,6 +109,14 @@ class Antibody:
     vx: float
     vy: float
     flash: int = 0  # 捕获后闪烁若干帧
+
+
+@dataclass
+class Leukocyte:
+    x: float
+    y: float
+    vx: float
+    vy: float
 
 
 # ---------- 工具 ----------
@@ -205,7 +232,7 @@ def push_out_of_other_cells(cell: Cell, cells: List[Cell]) -> None:
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
-        root.title("丝滑 CA：抗体捕获病毒 + 细胞感染爆发（圆形边界）")
+        root.title("丝滑 CA：抗体附着 + 白细胞清理 + 细胞感染爆发（圆形边界）")
         root.minsize(760, 820)
 
         self.top = tk.Frame(root)
@@ -248,6 +275,7 @@ class App:
         self.cells: List[Cell] = []
         self.viruses: List[Virus] = []
         self.antibodies: List[Antibody] = []
+        self.leukocytes: List[Leukocyte] = []
 
         self.ca_accum = 0.0
 
@@ -260,7 +288,7 @@ class App:
         self.canvas.create_oval(CENTER - r, CENTER - r, CENTER + r, CENTER + r,
                                 outline="#333", width=3, fill="#f8f8ff", tags=("static",))
         self.canvas.create_text(12, 12, anchor="nw",
-                                text="CA决策(离散方向) + 连续运动(丝滑) + 感染→繁殖→爆发",
+                                text="CA决策(离散方向) + 连续运动(丝滑) + 抗体附着 + 白细胞清理",
                                 fill="#444", font=("Helvetica", 12), tags=("static",))
 
     def reset(self):
@@ -279,6 +307,7 @@ class App:
         self.cells = []
         self.viruses = []
         self.antibodies = []
+        self.leukocytes = []
 
         # 生成细胞（尽量不重叠）
         attempts = 0
@@ -318,6 +347,16 @@ class App:
             vy = AB_SPEED * math.sin(ang)
             self.antibodies.append(Antibody(x=x, y=y, vx=vx, vy=vy))
 
+        # 生成白细胞
+        while len(self.leukocytes) < N_LEUKOCYTES:
+            x, y = rand_point_in_circle(RADIUS, margin=25)
+            if any(math.hypot(x - c.x, y - c.y) < (c.r + LEUKOCYTE_R + 4) for c in self.cells):
+                continue
+            ang = random.random() * 2 * math.pi
+            vx = LEUKOCYTE_SPEED * math.cos(ang)
+            vy = LEUKOCYTE_SPEED * math.sin(ang)
+            self.leukocytes.append(Leukocyte(x=x, y=y, vx=vx, vy=vy))
+
         self.render()
 
     def toggle(self):
@@ -354,8 +393,13 @@ class App:
         for c in self.cells:
             if c.state == "dead":
                 continue
+            speed_factor = 1.0
+            if c.antibody_attached > 0:
+                speed_factor = max(0.3, CELL_ATTACHED_SPEED_FACTOR - c.antibody_attached * CELL_ATTACHED_SPEED_DECAY)
             c.x += c.vx * dt
             c.y += c.vy * dt
+            c.vx *= speed_factor
+            c.vy *= speed_factor
             c.x, c.y, c.vx, c.vy = reflect_off_circle(c.x, c.y, c.vx, c.vy, margin=c.r)
             push_out_of_other_cells(c, self.cells)
 
@@ -378,11 +422,21 @@ class App:
             a.x, a.y, a.vx, a.vy = reflect_off_circle(a.x, a.y, a.vx, a.vy, margin=AB_R_FOR_COLLISION)
             a.x, a.y, a.vx, a.vy = push_out_of_cells(a.x, a.y, a.vx, a.vy, AB_R_FOR_COLLISION, self.cells)
 
+        # 连续移动：白细胞
+        for w in self.leukocytes:
+            w.x += w.vx * dt
+            w.y += w.vy * dt
+            w.x, w.y, w.vx, w.vy = reflect_off_circle(w.x, w.y, w.vx, w.vy, margin=LEUKOCYTE_R)
+            w.x, w.y, w.vx, w.vy = push_out_of_cells(w.x, w.y, w.vx, w.vy, LEUKOCYTE_R, self.cells)
+
         # 新增：感染逻辑（病毒贴到细胞 → 细胞变色并开始倒计时 → 爆发）
         self.infection_step(dt)
 
-        # 抗体捕获病毒
+        # 抗体附着
         self.capture_check()
+
+        # 白细胞清理
+        self.leukocyte_cleanup()
 
     # ---------- CA决策步：只更新“速度方向” ----------
     def ca_step(self):
@@ -397,24 +451,36 @@ class App:
             c.vx = (1.0 - TURN_SMOOTH) * c.vx + TURN_SMOOTH * nvx
             c.vy = (1.0 - TURN_SMOOTH) * c.vy + TURN_SMOOTH * nvy
 
-        # 病毒：随机游走 + 轻微向最近“未死亡细胞”靠近
+        # 病毒：随机游走 + 轻微向最近“未死亡细胞”靠近 + 远离白细胞
         live_cells = [c for c in self.cells if c.state != "dead"]
         for v in self.viruses:
             ang = random.random() * 2 * math.pi
             rx, ry = math.cos(ang), math.sin(ang)
 
-            if live_cells:
+            if live_cells and v.attached <= 0:
                 nearest = min(live_cells, key=lambda c: dist2(v.x, v.y, c.x, c.y))
                 cx, cy = nearest.x - v.x, nearest.y - v.y
                 cux, cuy = unit_vec(cx, cy)
             else:
                 cux, cuy = 0.0, 0.0
 
-            tx = (1.0 - VIRUS_ATTRACT_CELL) * rx + VIRUS_ATTRACT_CELL * cux
-            ty = (1.0 - VIRUS_ATTRACT_CELL) * ry + VIRUS_ATTRACT_CELL * cuy
+            if self.leukocytes:
+                nearest_w = min(self.leukocytes, key=lambda w: dist2(v.x, v.y, w.x, w.y))
+                wx, wy = v.x - nearest_w.x, v.y - nearest_w.y
+                wux, wuy = unit_vec(wx, wy)
+            else:
+                wux, wuy = 0.0, 0.0
+
+            avoid_scale = 1.0 + v.attached * VIRUS_ATTACHED_AVOID_SCALE
+            avoid_strength = VIRUS_AVOID_LEUKOCYTE * avoid_scale
+            base = max(0.0, 1.0 - VIRUS_ATTRACT_CELL - avoid_strength)
+            tx = base * rx + VIRUS_ATTRACT_CELL * cux + avoid_strength * wux
+            ty = base * ry + VIRUS_ATTRACT_CELL * cuy + avoid_strength * wuy
 
             ddx, ddy = pick_discrete_direction(tx, ty, self.directions)
-            nvx, nvy = ddx * VIRUS_SPEED, ddy * VIRUS_SPEED
+            speed_factor = max(0.2, VIRUS_ATTACHED_SPEED_FACTOR - v.attached * VIRUS_ATTACHED_SPEED_DECAY)
+            speed = VIRUS_SPEED * speed_factor
+            nvx, nvy = ddx * speed, ddy * speed
             v.vx = (1.0 - TURN_SMOOTH) * v.vx + TURN_SMOOTH * nvx
             v.vy = (1.0 - TURN_SMOOTH) * v.vy + TURN_SMOOTH * nvy
 
@@ -444,6 +510,34 @@ class App:
             nvx, nvy = ddx * AB_SPEED, ddy * AB_SPEED
             a.vx = (1.0 - TURN_SMOOTH) * a.vx + TURN_SMOOTH * nvx
             a.vy = (1.0 - TURN_SMOOTH) * a.vy + TURN_SMOOTH * nvy
+
+        # 白细胞：追踪被标记目标（附着病毒/感染细胞/死亡细胞）
+        sense2 = LEUKOCYTE_SENSE_RADIUS * LEUKOCYTE_SENSE_RADIUS
+        targets: List[Tuple[float, float]] = []
+        targets.extend((v.x, v.y) for v in self.viruses if v.attached > 0)
+        targets.extend((c.x, c.y) for c in self.cells if c.state in ("infected", "dead") or c.antibody_attached > 0)
+        for w in self.leukocytes:
+            target_pos: Optional[Tuple[float, float]] = None
+            best_d2 = sense2
+            for tx_pos, ty_pos in targets:
+                d2 = dist2(w.x, w.y, tx_pos, ty_pos)
+                if d2 < best_d2:
+                    best_d2 = d2
+                    target_pos = (tx_pos, ty_pos)
+            if target_pos is None:
+                ang = random.random() * 2 * math.pi
+                tx, ty = math.cos(ang), math.sin(ang)
+            else:
+                dx, dy = target_pos[0] - w.x, target_pos[1] - w.y
+                tux, tuy = unit_vec(dx, dy)
+                ang = random.random() * 2 * math.pi
+                rx, ry = math.cos(ang), math.sin(ang)
+                tx = LEUKOCYTE_CHASE * tux + (1.0 - LEUKOCYTE_CHASE) * rx
+                ty = LEUKOCYTE_CHASE * tuy + (1.0 - LEUKOCYTE_CHASE) * ry
+            ddx, ddy = pick_discrete_direction(tx, ty, self.directions)
+            nvx, nvy = ddx * LEUKOCYTE_SPEED, ddy * LEUKOCYTE_SPEED
+            w.vx = (1.0 - TURN_SMOOTH) * w.vx + TURN_SMOOTH * nvx
+            w.vy = (1.0 - TURN_SMOOTH) * w.vy + TURN_SMOOTH * nvy
 
     def cell_growth_and_division(self, dt: float):
         if not self.cells:
@@ -514,6 +608,9 @@ class App:
 
         # 为了效率：先把细胞分组（这里只做简单遍历，规模不大够用）
         for v in self.viruses:
+            if v.attached > 0:
+                new_viruses.append(v)
+                continue
             infected = False
             for c in self.cells:
                 if c.state != "healthy":
@@ -540,6 +637,7 @@ class App:
                 if c.burst_timer <= 0:
                     self.burst_count += 1
                     c.state = "dead"
+                    c.antibody_attached = 0
 
                     burst_count = burst_count_for_cell(c)
 
@@ -575,26 +673,84 @@ class App:
 
     # ---------- 抗体捕获 ----------
     def capture_check(self):
-        if not self.viruses:
+        if not self.viruses and not self.cells:
             return
-        survivors = []
-        removed = 0
         cap2 = CAPTURE_DIST * CAPTURE_DIST
+        remaining_antibodies = []
 
-        for v in self.viruses:
-            caught = False
-            for a in self.antibodies:
+        for a in self.antibodies:
+            attached = False
+            for v in self.viruses:
                 if dist2(v.x, v.y, a.x, a.y) <= cap2:
+                    v.attached += 1
                     a.flash = 8
-                    caught = True
-                    removed += 1
+                    self.captured += 1
+                    attached = True
                     break
-            if not caught:
-                survivors.append(v)
+            if attached:
+                continue
+            for c in self.cells:
+                if c.state != "infected":
+                    continue
+                if dist2(c.x, c.y, a.x, a.y) <= cap2:
+                    c.antibody_attached += 1
+                    a.flash = 8
+                    attached = True
+                    break
+            if not attached:
+                remaining_antibodies.append(a)
 
-        if removed:
-            self.viruses = survivors
-            self.captured += removed
+        self.antibodies = remaining_antibodies
+
+    def _spawn_antibodies(self, x: float, y: float, count: int) -> None:
+        if count <= 0:
+            return
+        for _ in range(count):
+            ang = random.random() * 2 * math.pi
+            rr = 6 + random.random() * 8
+            px = x + rr * math.cos(ang)
+            py = y + rr * math.sin(ang)
+            if not self._inside_big_circle(px, py, margin=AB_R_FOR_COLLISION):
+                dx, dy = px - CENTER, py - CENTER
+                d = math.hypot(dx, dy) or 1.0
+                nx, ny = dx / d, dy / d
+                limit = RADIUS - AB_R_FOR_COLLISION
+                px = CENTER + nx * limit
+                py = CENTER + ny * limit
+            ang_v = random.random() * 2 * math.pi
+            vx = AB_SPEED * math.cos(ang_v)
+            vy = AB_SPEED * math.sin(ang_v)
+            self.antibodies.append(Antibody(x=px, y=py, vx=vx, vy=vy))
+
+    def leukocyte_cleanup(self):
+        if not self.leukocytes:
+            return
+        virus_removed = set()
+        cell_removed = set()
+        virus_dist2 = (LEUKOCYTE_R + VIRUS_R) ** 2
+
+        for w in self.leukocytes:
+            for idx, v in enumerate(self.viruses):
+                if idx in virus_removed:
+                    continue
+                if dist2(w.x, w.y, v.x, v.y) <= virus_dist2:
+                    virus_removed.add(idx)
+                    spawn_count = random.randint(AB_SPAWN_MIN, AB_SPAWN_MAX)
+                    self._spawn_antibodies(v.x, v.y, spawn_count)
+
+            for idx, c in enumerate(self.cells):
+                if idx in cell_removed:
+                    continue
+                if c.state == "dead" or c.state == "infected":
+                    if dist2(w.x, w.y, c.x, c.y) <= (LEUKOCYTE_R + c.r) ** 2:
+                        cell_removed.add(idx)
+                        spawn_count = random.randint(AB_SPAWN_MIN, AB_SPAWN_MAX)
+                        self._spawn_antibodies(c.x, c.y, spawn_count)
+
+        if virus_removed:
+            self.viruses = [v for idx, v in enumerate(self.viruses) if idx not in virus_removed]
+        if cell_removed:
+            self.cells = [c for idx, c in enumerate(self.cells) if idx not in cell_removed]
 
     # ---------- 绘制 ----------
     def render(self):
@@ -605,7 +761,7 @@ class App:
             if c.state == "healthy":
                 col = CELL_COLOR
             elif c.state == "infected":
-                col = CELL_INFECTED_COLOR
+                col = CELL_INFECTED_BOUND_COLOR if c.antibody_attached > 0 else CELL_INFECTED_COLOR
             else:
                 col = CELL_DEAD_COLOR
 
@@ -622,8 +778,9 @@ class App:
 
         # 病毒
         for v in self.viruses:
+            v_col = VIRUS_BOUND_COLOR if v.attached > 0 else VIRUS_COLOR
             self.canvas.create_oval(v.x - VIRUS_R, v.y - VIRUS_R, v.x + VIRUS_R, v.y + VIRUS_R,
-                                    fill=VIRUS_COLOR, outline="", tags=("dyn",))
+                                    fill=v_col, outline="", tags=("dyn",))
 
         # 抗体（Y）
         for a in self.antibodies:
@@ -634,11 +791,18 @@ class App:
             self.canvas.create_line(x, y, x + s, y - s, fill=col, width=2, tags=("dyn",))
             self.canvas.create_line(x, y, x, y + s + 2, fill=col, width=2, tags=("dyn",))
 
+        # 白细胞
+        for w in self.leukocytes:
+            self.canvas.create_oval(w.x - LEUKOCYTE_R, w.y - LEUKOCYTE_R,
+                                    w.x + LEUKOCYTE_R, w.y + LEUKOCYTE_R,
+                                    fill=LEUKOCYTE_COLOR, outline=LEUKOCYTE_OUTLINE, width=2, tags=("dyn",))
+
         # HUD
         self.canvas.create_text(12, 42, anchor="nw",
                                 text=(f"Tick:{self.tick}  Viruses:{len(self.viruses)}  "
                                       f"Antibodies:{len(self.antibodies)}  Captured:{self.captured}  "
-                                      f"Infected:{self.infected_count}  Bursts:{self.burst_count}"),
+                                      f"Infected:{self.infected_count}  Bursts:{self.burst_count}  "
+                                      f"Leukocytes:{len(self.leukocytes)}"),
                                 fill="#111", font=("Helvetica", 12), tags=("dyn",))
 
 
