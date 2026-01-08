@@ -13,16 +13,16 @@ CENTER = CANVAS_SIZE // 2
 
 # 数量
 N_CELLS = 90
-N_VIRUSES = 50
-N_ANTIBODIES = 14
+N_VIRUSES = 20
+N_ANTIBODIES = 0
 N_LEUKOCYTES = 6
 
 # 尺寸
 CELL_R_SMALL = 10
 CELL_R_LARGE = 18
 VIRUS_R = 7
-AB_Y_SIZE = 7
-AB_R_FOR_COLLISION = 3  # 抗体碰撞半径（用于细胞障碍物）
+AB_Y_SIZE = 3
+AB_R_FOR_COLLISION = 0.1  # 抗体碰撞半径（用于细胞障碍物）
 LEUKOCYTE_R = 10
 
 # 动画与运动
@@ -31,9 +31,9 @@ CA_INTERVAL = 0.12        # 每隔多少秒做一次CA决策（离散方向更�
 TURN_SMOOTH = 0.45        # 速度方向平滑系数（越小越丝滑）
 
 VIRUS_SPEED = 70.0        # px/s
-AB_SPEED = 140.0          # px/s
+AB_SPEED = 100.0          # px/s
 CELL_SPEED = 18.0         # px/s 细胞慢速随机漂移
-LEUKOCYTE_SPEED = 95.0    # px/s 白细胞速度
+LEUKOCYTE_SPEED = 80.0    # px/s 白细胞速度
 VIRUS_ATTACHED_SPEED_FACTOR = 0.8
 VIRUS_ATTACHED_SPEED_DECAY = 0.2
 VIRUS_ATTACHED_AVOID_SCALE = 0.12
@@ -41,26 +41,26 @@ CELL_ATTACHED_SPEED_FACTOR = 0.7
 CELL_ATTACHED_SPEED_DECAY = 0.15
 
 # 行为参数
-VIRUS_ATTRACT_CELL = 0.25  # 病毒趋向细胞程度
-AB_SENSE_RADIUS = 120.0    # 抗体感知半径
-AB_CHASE = 0.85            # 抗体追逐强度
-CAPTURE_DIST = 12.0        # 抗体捕获距离
-VIRUS_AVOID_LEUKOCYTE = 0.7  # 病毒远离白细胞基础强度
+VIRUS_ATTRACT_CELL = 0.6  # 病毒趋向细胞程度
+AB_SENSE_RADIUS = 90.0    # 抗体感知半径
+AB_CHASE = 0.15            # 抗体追逐强度
+CAPTURE_DIST = 20.0        # 抗体捕获距离
+VIRUS_AVOID_LEUKOCYTE = 0.4  # 病毒远离白细胞强度
 LEUKOCYTE_SENSE_RADIUS = 160.0
 LEUKOCYTE_CHASE = 0.9
 AB_SPAWN_MIN = 1
-AB_SPAWN_MAX = 3
+AB_SPAWN_MAX = 1
 
 # 新增：感染与爆发参数
 INFECTION_PADDING = 2                   # 病毒“贴到细胞”判定阈值补偿（可调）
 VIRUS_REPLICATION_TIME = 3.0              # 病毒繁殖时间（秒）
-BURST_VIRUS_COUNT_SMALL = 6               # 小细胞破裂出现的病毒数量
-BURST_VIRUS_COUNT_LARGE = 18              # 大细胞破裂出现的病毒数量
+BURST_VIRUS_COUNT_SMALL = 2               # 小细胞破裂出现的病毒数量
+BURST_VIRUS_COUNT_LARGE = 5              # 大细胞破裂出现的病毒数量
 
 # 新增：细胞分裂/成长参数
-CELL_DIVIDE_TIME_MIN = 10.0               # 分裂最短时间（秒）
-CELL_DIVIDE_TIME_MAX = 22.0               # 分裂最长时间（秒）
-CELL_GROW_TIME = 18.0                     # 小细胞长成大细胞的时间（秒）
+CELL_DIVIDE_TIME_MIN = 3              # 分裂最短时间（秒）
+CELL_DIVIDE_TIME_MAX = 10             # 分裂最长时间（秒）
+CELL_GROW_TIME = 10                     # 小细胞长成大细胞的时间（秒）
 
 # 颜色
 BG_COLOR = "white"
