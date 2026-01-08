@@ -502,11 +502,11 @@ class App:
             a.vx = (1.0 - TURN_SMOOTH) * a.vx + TURN_SMOOTH * nvx
             a.vy = (1.0 - TURN_SMOOTH) * a.vy + TURN_SMOOTH * nvy
 
-        # 白细胞：追踪被标记目标（附着病毒/附着感染细胞/死亡细胞）
+        # 白细胞：追踪被标记目标（附着病毒/感染细胞/死亡细胞）
         sense2 = LEUKOCYTE_SENSE_RADIUS * LEUKOCYTE_SENSE_RADIUS
         targets: List[Tuple[float, float]] = []
         targets.extend((v.x, v.y) for v in self.viruses if v.attached)
-        targets.extend((c.x, c.y) for c in self.cells if c.state == "dead" or c.antibody_attached)
+        targets.extend((c.x, c.y) for c in self.cells if c.state in ("infected", "dead") or c.antibody_attached)
         for w in self.leukocytes:
             target_pos: Optional[Tuple[float, float]] = None
             best_d2 = sense2
@@ -734,7 +734,7 @@ class App:
             for idx, c in enumerate(self.cells):
                 if idx in cell_removed:
                     continue
-                if c.state == "dead" or (c.state == "infected" and c.antibody_attached):
+                if c.state == "dead" or c.state == "infected":
                     if dist2(w.x, w.y, c.x, c.y) <= (LEUKOCYTE_R + c.r) ** 2:
                         cell_removed.add(idx)
                         spawn_count = random.randint(AB_SPAWN_MIN, AB_SPAWN_MAX)
