@@ -265,6 +265,8 @@ class App:
         self.tick = 0
         self.infected_count = 0
         self.burst_count = 0
+        self.elapsed_time = 0.0
+        self.history: List[Tuple[float, int, int, int, int]] = []
 
         # 离散方向（16方向）
         self.directions = []
@@ -302,6 +304,8 @@ class App:
         self.tick = 0
         self.infected_count = 0
         self.burst_count = 0
+        self.elapsed_time = 0.0
+        self.history = []
         self.ca_accum = 0.0
 
         self.cells = []
@@ -357,6 +361,7 @@ class App:
             vy = LEUKOCYTE_SPEED * math.sin(ang)
             self.leukocytes.append(Leukocyte(x=x, y=y, vx=vx, vy=vy))
 
+        self.record_history()
         self.render()
 
     def toggle(self):
@@ -364,6 +369,8 @@ class App:
         self.btn.configure(text="Pause" if self.running else "Start")
         if self.running:
             self.loop()
+        else:
+            self.show_timeline_chart()
 
     def step_ca_once(self):
         self.ca_step()
@@ -377,11 +384,14 @@ class App:
 
         self.animate_step(dt)
         self.render()
+        if not self.running:
+            return
         self.after_id = self.root.after(int(1000 / fps), self.loop)
 
     # ---------- 连续动画步 ----------
     def animate_step(self, dt: float):
         self.tick += 1
+        self.elapsed_time += dt
         self.ca_accum += dt
 
         # CA决策步
@@ -437,6 +447,62 @@ class App:
 
         # 白细胞清理
         self.leukocyte_cleanup()
+        self.record_history()
+
+    def record_history(self):
+        live_cells = sum(1 for c in self.cells if c.state != "dead")
+        self.history.append((self.elapsed_time, len(self.leukocytes), live_cells, len(self.viruses), len(self.antibodies)))
+
+    def show_timeline_chart(self):
+        if not self.history:
+            return
+        chart = tk.Toplevel(self.root)
+        chart.title("数量时间线")
+        width, height = 760, 420
+        margin_left, margin_right = 60, 20
+        margin_top, margin_bottom = 40, 50
+        canvas = tk.Canvas(chart, width=width, height=height, bg="white")
+        canvas.pack(fill="both", expand=True)
+
+        times = [h[0] for h in self.history]
+        leukocytes = [h[1] for h in self.history]
+        cells = [h[2] for h in self.history]
+        viruses = [h[3] for h in self.history]
+        antibodies = [h[4] for h in self.history]
+
+        max_time = max(times) if times else 1.0
+        max_count = max(max(leukocytes), max(cells), max(viruses), max(antibodies), 1)
+
+        plot_w = width - margin_left - margin_right
+        plot_h = height - margin_top - margin_bottom
+        x0 = margin_left
+        y0 = height - margin_bottom
+
+        canvas.create_line(x0, y0, x0 + plot_w, y0, fill="#333")
+        canvas.create_line(x0, y0, x0, y0 - plot_h, fill="#333")
+        canvas.create_text(x0, y0 + 25, text="时间 (s)", anchor="nw", fill="#333")
+        canvas.create_text(10, margin_top - 10, text="数量", anchor="nw", fill="#333")
+
+        def to_xy(t: float, value: int) -> Tuple[float, float]:
+            x = x0 + (t / max_time) * plot_w
+            y = y0 - (value / max_count) * plot_h
+            return x, y
+
+        def draw_series(values: List[int], color: str, label: str, y_offset: int):
+            points = []
+            for t, v in zip(times, values):
+                points.extend(to_xy(t, v))
+            if len(points) >= 4:
+                canvas.create_line(points, fill=color, width=2)
+            legend_x = x0 + plot_w - 120
+            legend_y = margin_top + y_offset
+            canvas.create_line(legend_x, legend_y + 6, legend_x + 18, legend_y + 6, fill=color, width=3)
+            canvas.create_text(legend_x + 26, legend_y, text=label, anchor="nw", fill="#333")
+
+        draw_series(leukocytes, LEUKOCYTE_OUTLINE, "白细胞", 0)
+        draw_series(cells, CELL_COLOR, "普通细胞", 20)
+        draw_series(viruses, VIRUS_COLOR, "病毒", 40)
+        draw_series(antibodies, AB_COLOR, "抗体", 60)
 
     # ---------- CA决策步：只更新“速度方向” ----------
     def ca_step(self):
