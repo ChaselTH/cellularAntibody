@@ -484,12 +484,14 @@ class App:
             v.vx = (1.0 - TURN_SMOOTH) * v.vx + TURN_SMOOTH * nvx
             v.vy = (1.0 - TURN_SMOOTH) * v.vy + TURN_SMOOTH * nvy
 
-        # 抗体：感知半径内找最近病毒，否则随机
+        # 抗体：感知半径内找最近未附着病毒，否则随机
         sense2 = AB_SENSE_RADIUS * AB_SENSE_RADIUS
         for a in self.antibodies:
             target: Optional[Virus] = None
             best_d2 = sense2
             for v in self.viruses:
+                if v.attached:
+                    continue
                 d2 = dist2(a.x, a.y, v.x, v.y)
                 if d2 < best_d2:
                     best_d2 = d2
