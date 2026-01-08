@@ -17,7 +17,8 @@ N_VIRUSES = 50
 N_ANTIBODIES = 14
 
 # 尺寸
-CELL_R = 18
+CELL_R_SMALL = 10
+CELL_R_LARGE = 18
 VIRUS_R = 7
 AB_Y_SIZE = 7
 AB_R_FOR_COLLISION = 3  # 抗体碰撞半径（用于细胞障碍物）
@@ -29,6 +30,7 @@ TURN_SMOOTH = 0.45        # 速度方向平滑系数（越小越丝滑）
 
 VIRUS_SPEED = 70.0        # px/s
 AB_SPEED = 140.0          # px/s
+CELL_SPEED = 18.0         # px/s 细胞慢速随机漂移
 
 # 行为参数
 VIRUS_ATTRACT_CELL = 0.25  # 病毒趋向细胞程度
@@ -37,9 +39,15 @@ AB_CHASE = 0.85            # 抗体追逐强度
 CAPTURE_DIST = 12.0        # 抗体捕获距离
 
 # 新增：感染与爆发参数
-INFECTION_DIST = CELL_R + VIRUS_R + 2   # 病毒“贴到细胞”判定阈值（可调）
+INFECTION_PADDING = 2                   # 病毒“贴到细胞”判定阈值补偿（可调）
 VIRUS_REPLICATION_TIME = 3.0              # 病毒繁殖时间（秒）
-BURST_VIRUS_COUNT = 18                    # 细胞破裂出现的病毒数量
+BURST_VIRUS_COUNT_SMALL = 6               # 小细胞破裂出现的病毒数量
+BURST_VIRUS_COUNT_LARGE = 18              # 大细胞破裂出现的病毒数量
+
+# 新增：细胞分裂/成长参数
+CELL_DIVIDE_TIME_MIN = 10.0               # 分裂最短时间（秒）
+CELL_DIVIDE_TIME_MAX = 22.0               # 分裂最长时间（秒）
+CELL_GROW_TIME = 18.0                     # 小细胞长成大细胞的时间（秒）
 
 # 颜色
 BG_COLOR = "white"
@@ -58,9 +66,13 @@ AB_FLASH_COLOR = "#E45756"
 class Cell:
     x: float
     y: float
-    r: float = CELL_R
+    vx: float
+    vy: float
+    r: float = CELL_R_LARGE
     state: str = "healthy"      # healthy | infected | dead
     burst_timer: float = 0.0    # infected -> countdown to burst
+    grow_timer: float = CELL_GROW_TIME
+    divide_timer: Optional[float] = None
 
 
 @dataclass
@@ -100,6 +112,20 @@ def unit_vec(dx: float, dy: float) -> Tuple[float, float]:
     if d < 1e-9:
         return 0.0, 0.0
     return dx / d, dy / d
+
+
+def clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def lerp(a: float, b: float, t: float) -> float:
+    return a + (b - a) * t
+
+
+def burst_count_for_cell(cell: Cell) -> int:
+    denom = CELL_R_LARGE - CELL_R_SMALL
+    ratio = 1.0 if denom <= 0 else clamp((cell.r - CELL_R_SMALL) / denom, 0.0, 1.0)
+    return int(round(lerp(BURST_VIRUS_COUNT_SMALL, BURST_VIRUS_COUNT_LARGE, ratio)))
 
 
 def pick_discrete_direction(dx: float, dy: float, directions: List[Tuple[float, float]]) -> Tuple[float, float]:
@@ -153,6 +179,27 @@ def push_out_of_cells(x: float, y: float, vx: float, vy: float, r_obj: float, ce
             x = c.x + math.cos(a) * min_d
             y = c.y + math.sin(a) * min_d
     return x, y, vx, vy
+
+
+def push_out_of_other_cells(cell: Cell, cells: List[Cell]) -> None:
+    for other in cells:
+        if other is cell or other.state == "dead":
+            continue
+        dx = cell.x - other.x
+        dy = cell.y - other.y
+        d = math.hypot(dx, dy)
+        min_d = cell.r + other.r
+        if d < min_d and d > 1e-9:
+            nx, ny = dx / d, dy / d
+            overlap = min_d - d
+            cell.x += nx * overlap * 0.6
+            cell.y += ny * overlap * 0.6
+            cell.vx -= nx * overlap * 0.4
+            cell.vy -= ny * overlap * 0.4
+        elif d < 1e-9:
+            ang = random.random() * 2 * math.pi
+            cell.x = other.x + math.cos(ang) * min_d
+            cell.y = other.y + math.sin(ang) * min_d
 
 
 class App:
@@ -240,11 +287,16 @@ class App:
             x, y = rand_point_in_circle(RADIUS, margin=70)
             ok = True
             for c in self.cells:
-                if math.hypot(x - c.x, y - c.y) < (CELL_R * 2 + 14):
+                if math.hypot(x - c.x, y - c.y) < (CELL_R_LARGE * 2 + 14):
                     ok = False
                     break
             if ok:
-                self.cells.append(Cell(x=x, y=y))
+                ang = random.random() * 2 * math.pi
+                vx = CELL_SPEED * math.cos(ang)
+                vy = CELL_SPEED * math.sin(ang)
+                self.cells.append(Cell(x=x, y=y, vx=vx, vy=vy, r=CELL_R_LARGE,
+                                       grow_timer=CELL_GROW_TIME,
+                                       divide_timer=random.uniform(CELL_DIVIDE_TIME_MIN, CELL_DIVIDE_TIME_MAX)))
 
         # 生成病毒
         while len(self.viruses) < N_VIRUSES:
@@ -298,6 +350,18 @@ class App:
             self.ca_accum %= CA_INTERVAL
             self.ca_step()
 
+        # 连续移动：细胞
+        for c in self.cells:
+            if c.state == "dead":
+                continue
+            c.x += c.vx * dt
+            c.y += c.vy * dt
+            c.x, c.y, c.vx, c.vy = reflect_off_circle(c.x, c.y, c.vx, c.vy, margin=c.r)
+            push_out_of_other_cells(c, self.cells)
+
+        # 细胞成长与分裂
+        self.cell_growth_and_division(dt)
+
         # 连续移动：病毒
         for v in self.viruses:
             v.x += v.vx * dt
@@ -322,6 +386,17 @@ class App:
 
     # ---------- CA决策步：只更新“速度方向” ----------
     def ca_step(self):
+        # 细胞：慢速、无目的乱动
+        for c in self.cells:
+            if c.state == "dead":
+                continue
+            ang = random.random() * 2 * math.pi
+            tx, ty = math.cos(ang), math.sin(ang)
+            ddx, ddy = pick_discrete_direction(tx, ty, self.directions)
+            nvx, nvy = ddx * CELL_SPEED, ddy * CELL_SPEED
+            c.vx = (1.0 - TURN_SMOOTH) * c.vx + TURN_SMOOTH * nvx
+            c.vy = (1.0 - TURN_SMOOTH) * c.vy + TURN_SMOOTH * nvy
+
         # 病毒：随机游走 + 轻微向最近“未死亡细胞”靠近
         live_cells = [c for c in self.cells if c.state != "dead"]
         for v in self.viruses:
@@ -370,13 +445,70 @@ class App:
             a.vx = (1.0 - TURN_SMOOTH) * a.vx + TURN_SMOOTH * nvx
             a.vy = (1.0 - TURN_SMOOTH) * a.vy + TURN_SMOOTH * nvy
 
+    def cell_growth_and_division(self, dt: float):
+        if not self.cells:
+            return
+        updated_cells = []
+        newborn_cells: List[Cell] = []
+
+        for c in self.cells:
+            if c.state == "dead":
+                updated_cells.append(c)
+                continue
+
+            if CELL_GROW_TIME <= 0:
+                c.grow_timer = CELL_GROW_TIME
+                c.r = CELL_R_LARGE
+                if c.divide_timer is None:
+                    c.divide_timer = random.uniform(CELL_DIVIDE_TIME_MIN, CELL_DIVIDE_TIME_MAX)
+            elif c.grow_timer < CELL_GROW_TIME:
+                c.grow_timer = min(CELL_GROW_TIME, c.grow_timer + dt)
+                progress = c.grow_timer / CELL_GROW_TIME
+                c.r = lerp(CELL_R_SMALL, CELL_R_LARGE, progress)
+                if c.r >= CELL_R_LARGE - 1e-3 and c.divide_timer is None:
+                    c.divide_timer = random.uniform(CELL_DIVIDE_TIME_MIN, CELL_DIVIDE_TIME_MAX)
+
+            if c.state == "healthy" and c.r >= CELL_R_LARGE - 1e-3 and c.divide_timer is not None:
+                c.divide_timer -= dt
+                if c.divide_timer <= 0:
+                    newborn_cells.extend(self.divide_cell(c))
+                    continue
+
+            updated_cells.append(c)
+
+        if newborn_cells:
+            updated_cells.extend(newborn_cells)
+            for newborn in newborn_cells:
+                push_out_of_other_cells(newborn, updated_cells)
+        self.cells = updated_cells
+
+    def divide_cell(self, cell: Cell) -> List[Cell]:
+        ang = random.random() * 2 * math.pi
+        offset = max(CELL_R_SMALL + 2, cell.r * 0.6)
+        dx = math.cos(ang) * offset
+        dy = math.sin(ang) * offset
+        positions = [(cell.x + dx, cell.y + dy), (cell.x - dx, cell.y - dy)]
+        children = []
+        for x, y in positions:
+            if not self._inside_big_circle(x, y, margin=CELL_R_SMALL):
+                dx_c, dy_c = x - CENTER, y - CENTER
+                d = math.hypot(dx_c, dy_c) or 1.0
+                nx, ny = dx_c / d, dy_c / d
+                limit = RADIUS - CELL_R_SMALL
+                x = CENTER + nx * limit
+                y = CENTER + ny * limit
+            ang_v = random.random() * 2 * math.pi
+            vx = CELL_SPEED * math.cos(ang_v)
+            vy = CELL_SPEED * math.sin(ang_v)
+            children.append(Cell(x=x, y=y, vx=vx, vy=vy, r=CELL_R_SMALL, grow_timer=0.0))
+        return children
+
     # ---------- 新增：感染/爆发 ----------
     def infection_step(self, dt: float):
         if not self.cells or not self.viruses:
             return
 
         # 1) 病毒贴到健康细胞 -> 感染（细胞变色）+ 该病毒“进入细胞”（删除）
-        inf_dist2 = INFECTION_DIST * INFECTION_DIST
         new_viruses = []
         removed_by_infection = 0
 
@@ -386,7 +518,8 @@ class App:
             for c in self.cells:
                 if c.state != "healthy":
                     continue
-                if dist2(v.x, v.y, c.x, c.y) <= inf_dist2:
+                infection_dist = c.r + VIRUS_R + INFECTION_PADDING
+                if dist2(v.x, v.y, c.x, c.y) <= infection_dist * infection_dist:
                     # 感染发生
                     c.state = "infected"
                     c.burst_timer = VIRUS_REPLICATION_TIME
@@ -408,8 +541,10 @@ class App:
                     self.burst_count += 1
                     c.state = "dead"
 
+                    burst_count = burst_count_for_cell(c)
+
                     # 爆发产生病毒：从细胞附近喷出
-                    for _ in range(BURST_VIRUS_COUNT):
+                    for _ in range(burst_count):
                         ang = random.random() * 2 * math.pi
                         # 出生点：细胞边缘附近稍微外移一点
                         rr = c.r + VIRUS_R + random.random() * 6.0
