@@ -34,14 +34,18 @@ VIRUS_SPEED = 70.0        # px/s
 AB_SPEED = 140.0          # px/s
 CELL_SPEED = 18.0         # px/s 细胞慢速随机漂移
 LEUKOCYTE_SPEED = 95.0    # px/s 白细胞速度
-VIRUS_ATTACHED_SPEED_FACTOR = 0.55
+VIRUS_ATTACHED_SPEED_FACTOR = 0.8
+VIRUS_ATTACHED_SPEED_DECAY = 0.2
+VIRUS_ATTACHED_AVOID_SCALE = 0.12
+CELL_ATTACHED_SPEED_FACTOR = 0.7
+CELL_ATTACHED_SPEED_DECAY = 0.15
 
 # 行为参数
 VIRUS_ATTRACT_CELL = 0.25  # 病毒趋向细胞程度
 AB_SENSE_RADIUS = 120.0    # 抗体感知半径
 AB_CHASE = 0.85            # 抗体追逐强度
 CAPTURE_DIST = 12.0        # 抗体捕获距离
-VIRUS_AVOID_LEUKOCYTE = 0.7  # 病毒远离白细胞强度
+VIRUS_AVOID_LEUKOCYTE = 0.7  # 病毒远离白细胞基础强度
 LEUKOCYTE_SENSE_RADIUS = 160.0
 LEUKOCYTE_CHASE = 0.9
 AB_SPAWN_MIN = 1
@@ -86,7 +90,7 @@ class Cell:
     burst_timer: float = 0.0    # infected -> countdown to burst
     grow_timer: float = CELL_GROW_TIME
     divide_timer: Optional[float] = None
-    antibody_attached: bool = False
+    antibody_attached: int = 0
 
 
 @dataclass
@@ -95,7 +99,7 @@ class Virus:
     y: float
     vx: float
     vy: float
-    attached: bool = False
+    attached: int = 0
 
 
 @dataclass
@@ -389,8 +393,13 @@ class App:
         for c in self.cells:
             if c.state == "dead":
                 continue
+            speed_factor = 1.0
+            if c.antibody_attached > 0:
+                speed_factor = max(0.3, CELL_ATTACHED_SPEED_FACTOR - c.antibody_attached * CELL_ATTACHED_SPEED_DECAY)
             c.x += c.vx * dt
             c.y += c.vy * dt
+            c.vx *= speed_factor
+            c.vy *= speed_factor
             c.x, c.y, c.vx, c.vy = reflect_off_circle(c.x, c.y, c.vx, c.vy, margin=c.r)
             push_out_of_other_cells(c, self.cells)
 
@@ -448,7 +457,7 @@ class App:
             ang = random.random() * 2 * math.pi
             rx, ry = math.cos(ang), math.sin(ang)
 
-            if live_cells and not v.attached:
+            if live_cells and v.attached <= 0:
                 nearest = min(live_cells, key=lambda c: dist2(v.x, v.y, c.x, c.y))
                 cx, cy = nearest.x - v.x, nearest.y - v.y
                 cux, cuy = unit_vec(cx, cy)
@@ -462,13 +471,15 @@ class App:
             else:
                 wux, wuy = 0.0, 0.0
 
-            tx = (1.0 - VIRUS_ATTRACT_CELL - VIRUS_AVOID_LEUKOCYTE) * rx + VIRUS_ATTRACT_CELL * cux
-            ty = (1.0 - VIRUS_ATTRACT_CELL - VIRUS_AVOID_LEUKOCYTE) * ry + VIRUS_ATTRACT_CELL * cuy
-            tx += VIRUS_AVOID_LEUKOCYTE * wux
-            ty += VIRUS_AVOID_LEUKOCYTE * wuy
+            avoid_scale = 1.0 + v.attached * VIRUS_ATTACHED_AVOID_SCALE
+            avoid_strength = VIRUS_AVOID_LEUKOCYTE * avoid_scale
+            base = max(0.0, 1.0 - VIRUS_ATTRACT_CELL - avoid_strength)
+            tx = base * rx + VIRUS_ATTRACT_CELL * cux + avoid_strength * wux
+            ty = base * ry + VIRUS_ATTRACT_CELL * cuy + avoid_strength * wuy
 
             ddx, ddy = pick_discrete_direction(tx, ty, self.directions)
-            speed = VIRUS_SPEED * (VIRUS_ATTACHED_SPEED_FACTOR if v.attached else 1.0)
+            speed_factor = max(0.2, VIRUS_ATTACHED_SPEED_FACTOR - v.attached * VIRUS_ATTACHED_SPEED_DECAY)
+            speed = VIRUS_SPEED * speed_factor
             nvx, nvy = ddx * speed, ddy * speed
             v.vx = (1.0 - TURN_SMOOTH) * v.vx + TURN_SMOOTH * nvx
             v.vy = (1.0 - TURN_SMOOTH) * v.vy + TURN_SMOOTH * nvy
@@ -505,8 +516,8 @@ class App:
         # 白细胞：追踪被标记目标（附着病毒/感染细胞/死亡细胞）
         sense2 = LEUKOCYTE_SENSE_RADIUS * LEUKOCYTE_SENSE_RADIUS
         targets: List[Tuple[float, float]] = []
-        targets.extend((v.x, v.y) for v in self.viruses if v.attached)
-        targets.extend((c.x, c.y) for c in self.cells if c.state in ("infected", "dead") or c.antibody_attached)
+        targets.extend((v.x, v.y) for v in self.viruses if v.attached > 0)
+        targets.extend((c.x, c.y) for c in self.cells if c.state in ("infected", "dead") or c.antibody_attached > 0)
         for w in self.leukocytes:
             target_pos: Optional[Tuple[float, float]] = None
             best_d2 = sense2
@@ -599,7 +610,7 @@ class App:
 
         # 为了效率：先把细胞分组（这里只做简单遍历，规模不大够用）
         for v in self.viruses:
-            if v.attached:
+            if v.attached > 0:
                 new_viruses.append(v)
                 continue
             infected = False
@@ -628,7 +639,7 @@ class App:
                 if c.burst_timer <= 0:
                     self.burst_count += 1
                     c.state = "dead"
-                    c.antibody_attached = False
+                    c.antibody_attached = 0
 
                     burst_count = burst_count_for_cell(c)
 
@@ -672,10 +683,8 @@ class App:
         for a in self.antibodies:
             attached = False
             for v in self.viruses:
-                if v.attached:
-                    continue
                 if dist2(v.x, v.y, a.x, a.y) <= cap2:
-                    v.attached = True
+                    v.attached += 1
                     a.flash = 8
                     self.captured += 1
                     attached = True
@@ -683,10 +692,10 @@ class App:
             if attached:
                 continue
             for c in self.cells:
-                if c.state != "infected" or c.antibody_attached:
+                if c.state != "infected":
                     continue
                 if dist2(c.x, c.y, a.x, a.y) <= cap2:
-                    c.antibody_attached = True
+                    c.antibody_attached += 1
                     a.flash = 8
                     attached = True
                     break
@@ -754,7 +763,7 @@ class App:
             if c.state == "healthy":
                 col = CELL_COLOR
             elif c.state == "infected":
-                col = CELL_INFECTED_BOUND_COLOR if c.antibody_attached else CELL_INFECTED_COLOR
+                col = CELL_INFECTED_BOUND_COLOR if c.antibody_attached > 0 else CELL_INFECTED_COLOR
             else:
                 col = CELL_DEAD_COLOR
 
@@ -771,7 +780,7 @@ class App:
 
         # 病毒
         for v in self.viruses:
-            v_col = VIRUS_BOUND_COLOR if v.attached else VIRUS_COLOR
+            v_col = VIRUS_BOUND_COLOR if v.attached > 0 else VIRUS_COLOR
             self.canvas.create_oval(v.x - VIRUS_R, v.y - VIRUS_R, v.x + VIRUS_R, v.y + VIRUS_R,
                                     fill=v_col, outline="", tags=("dyn",))
 
