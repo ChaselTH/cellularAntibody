@@ -122,6 +122,12 @@ def lerp(a: float, b: float, t: float) -> float:
     return a + (b - a) * t
 
 
+def burst_count_for_cell(cell: Cell) -> int:
+    denom = CELL_R_LARGE - CELL_R_SMALL
+    ratio = 1.0 if denom <= 0 else clamp((cell.r - CELL_R_SMALL) / denom, 0.0, 1.0)
+    return int(round(lerp(BURST_VIRUS_COUNT_SMALL, BURST_VIRUS_COUNT_LARGE, ratio)))
+
+
 def pick_discrete_direction(dx: float, dy: float, directions: List[Tuple[float, float]]) -> Tuple[float, float]:
     ux, uy = unit_vec(dx, dy)
     best = directions[0]
@@ -535,8 +541,7 @@ class App:
                     self.burst_count += 1
                     c.state = "dead"
 
-                    size_ratio = clamp((c.r - CELL_R_SMALL) / (CELL_R_LARGE - CELL_R_SMALL), 0.0, 1.0)
-                    burst_count = int(round(lerp(BURST_VIRUS_COUNT_SMALL, BURST_VIRUS_COUNT_LARGE, size_ratio)))
+                    burst_count = burst_count_for_cell(c)
 
                     # 爆发产生病毒：从细胞附近喷出
                     for _ in range(burst_count):
