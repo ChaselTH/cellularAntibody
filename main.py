@@ -267,7 +267,6 @@ class App:
         self.burst_count = 0
         self.elapsed_time = 0.0
         self.history: List[Tuple[float, int, int, int, int]] = []
-        self.chart_shown = False
 
         # 离散方向（16方向）
         self.directions = []
@@ -307,7 +306,6 @@ class App:
         self.burst_count = 0
         self.elapsed_time = 0.0
         self.history = []
-        self.chart_shown = False
         self.ca_accum = 0.0
 
         self.cells = []
@@ -371,6 +369,8 @@ class App:
         self.btn.configure(text="Pause" if self.running else "Start")
         if self.running:
             self.loop()
+        else:
+            self.show_timeline_chart()
 
     def step_ca_once(self):
         self.ca_step()
@@ -448,23 +448,10 @@ class App:
         # 白细胞清理
         self.leukocyte_cleanup()
         self.record_history()
-        self.check_simulation_end()
 
     def record_history(self):
         live_cells = sum(1 for c in self.cells if c.state != "dead")
         self.history.append((self.elapsed_time, len(self.leukocytes), live_cells, len(self.viruses), len(self.antibodies)))
-
-    def check_simulation_end(self):
-        if self.chart_shown:
-            return
-        if len(self.viruses) == 0:
-            self.chart_shown = True
-            self.pause_and_plot()
-
-    def pause_and_plot(self):
-        self.running = False
-        self.btn.configure(text="Start")
-        self.show_timeline_chart()
 
     def show_timeline_chart(self):
         if not self.history:
